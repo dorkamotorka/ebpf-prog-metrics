@@ -1,4 +1,3 @@
-//go:build ignore
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
@@ -33,6 +32,8 @@ int bpftop_iter(struct bpf_iter__task_file *ctx)
 
 	bpf_probe_read_kernel_str(&e.comm, sizeof(e.comm),
 				  task->group_leader->comm);
+
+	bpf_printk("bpf_seq_write executed...");
 	bpf_seq_write(ctx->meta->seq, &e, sizeof(e));
 
 	return 0;
