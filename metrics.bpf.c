@@ -19,19 +19,23 @@ int bpftop_iter(struct bpf_iter__task_file *ctx)
 	struct task_struct *task = ctx->task;
 	struct pid_iter_entry e;
 
-	if (!file || !task)
+	if (!file || !task) {
 		return 0;
+	}
 
-	if (file->f_op != &bpf_prog_fops)
+	__u64 sum_exec_runtime = BPF_CORE_READ(task, se.sum_exec_runtime);
+	bpf_printk("sum_exec_runtime: %d", sum_exec_runtime);
+
+	if (file->f_op != &bpf_prog_fops) {
 		return 0;
+	}
 
 	__builtin_memset(&e, 0, sizeof(e));
 
-	e.pid = task->tgid;
+	e.pid = BPF_CORE_READ(task, tgid);
 	e.id = BPF_CORE_READ((struct bpf_prog *)file->private_data, aux, id);
 
-	bpf_probe_read_kernel_str(&e.comm, sizeof(e.comm),
-				  task->group_leader->comm);
+	bpf_probe_read_kernel_str(&e.comm, sizeof(e.comm), task->group_leader->comm);
 
 	bpf_printk("bpf_seq_write executed...");
 	bpf_seq_write(ctx->meta->seq, &e, sizeof(e));
