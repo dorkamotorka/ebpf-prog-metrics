@@ -1,77 +1,50 @@
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/resource.h>
-#include <bpf/bpf.h>
-#include <bpf/libbpf.h>
-#include "metrics.skel.h"
+//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 
-struct pid_iter_entry {
-	__u32 id;
-	int pid;
-	char comm[16];
-};
+char _license[] SEC("license") = "GPL";
 
-int main(void)
+static const char *get_name(struct btf *btf, long btf_id, const char *fallback)
 {
-    struct metrics_bpf *obj;
-    struct pid_iter_entry buf;
-    int iter_fd;
-    ssize_t ret;
-    int err;
+	struct btf_type **types, *t;
+	unsigned int name_off;
+	const char *str;
 
-    struct rlimit rlim = {
-        .rlim_cur = 512UL << 20,
-        .rlim_max = 512UL << 20,
-    };
+	if (!btf) {
+		return fallback;
+	}
 
-    err = setrlimit(RLIMIT_MEMLOCK, &rlim);
-    if (err) {
-        fprintf(stderr, "failed to change rlimit\n");
-        return 1;
-    }
+	str = btf->strings;
+	types = btf->types;
+	bpf_probe_read_kernel(&t, sizeof(t), types + btf_id);
+	name_off = BPF_CORE_READ(t, name_off);
 
-    obj = metrics_bpf__open_and_load();
-    if (!obj) {
-        fprintf(stderr, "failed to open and/or load BPF object\n");
-        return 1;
-    }
+	if (name_off >= btf->hdr.str_len) {
+		return fallback;
+	}
 
-    err = metrics_bpf__attach(obj);
-    if (err) {
-        fprintf(stderr, "failed to attach BPF programs\n");
-        goto cleanup;
-    }
-    
-    iter_fd = bpf_iter_create(bpf_link__fd(obj->links.bpftop_iter));
-    if (iter_fd < 0) {
-	err = -1;
-	fprintf(stderr, "Failed to create iter\n");
-	goto cleanup;
-    }
+	return str + name_off;
+}
 
-    fprintf(stdout, "eBPF program running\n");
+SEC("iter/bpf_prog")
+int dump_bpf_prog(struct bpf_iter__bpf_prog *ctx) {
+	struct seq_file *seq = ctx->meta->seq;
+	__u64 seq_num = ctx->meta->seq_num;
+	struct bpf_prog *prog = ctx->prog;
+	struct bpf_prog_aux *aux;
 
-    // Infinite loop to keep the program running
-    while (true) {
-	    ret = read(iter_fd, &buf, sizeof(struct pid_iter_entry));
-	    if (ret < 0) {
-		    if (errno == EAGAIN) {
-			continue;
-		    }
-		    	
-		    err = -errno;
-		    break;
-	    }
+	if (!prog) {
+		return 0;
+	}
 
-	    if (ret == 0) {
-		    break;
-	    }
-		
-	    printf("ID: %d. Pid: %d. Process Name: %s.\n", buf.id, buf.pid, buf.comm);
-    }
+	aux = prog->aux;
+	if (seq_num == 0) {
+		BPF_SEQ_PRINTF(seq, "  id name             attached\n");
+	}
 
-cleanup:
-    close(iter_fd);
-    metrics_bpf__destroy(obj);
-    return err != 0;
+	BPF_SEQ_PRINTF(seq, "%4u %-16s %s %s\n", aux->id,
+		       get_name(aux->btf, aux->func_info[0].type_id, aux->name),
+		       aux->attach_func_name, aux->dst_prog->aux->name);
+	return 0;
 }
